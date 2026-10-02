@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { mDNS } from '@devioarts/capacitor-mdns';
 import { 
   Upload, Download, Printer, Move, ZoomIn, Image as ImageIcon, 
   CheckCircle2, RotateCw, Sun, SlidersHorizontal, 
@@ -21,22 +23,21 @@ const SHEET_SIZES = [
   { id: '4x6', name: '4 x 6 inch', widthPx: 1800, heightPx: 1200 }, // Landscape dimensions 6x4 at 300dpi
 ];
 
-const MOCK_PRINTERS = [
-  'HP LaserJet Pro Network',
-  'Canon PIXMA Wireless',
-  'Epson EcoTank Wi-Fi',
-  'Brother HL-L2350DW'
+const PRINTER_SERVICE_TYPES = [
+  '_ipp._tcp.',
+  '_ipps._tcp.',
+  '_printer._tcp.',
+  '_pdl-datastream._tcp.',
 ];
 
 const loadAddedPrinters = () => {
   try {
-    const savedPrinters = JSON.parse(window.localStorage.getItem('pcut-added-printers') || '{}');
+    const savedPrinters = JSON.parse(window.localStorage.getItem('pcut-printer-devices') || '{}');
     return {
       wifi: Array.isArray(savedPrinters.wifi) ? savedPrinters.wifi : [],
-      bluetooth: Array.isArray(savedPrinters.bluetooth) ? savedPrinters.bluetooth : [],
     };
   } catch {
-    return { wifi: [], bluetooth: [] };
+    return { wifi: [] };
   }
 };
 
@@ -74,8 +75,8 @@ export default function PassportPhotoMaker() {
   const [connectionType, setConnectionType] = useState(null);
   const [selectedPrinter, setSelectedPrinter] = useState(null);
   const [addedPrinters, setAddedPrinters] = useState(loadAddedPrinters);
-  const [isAddingDevice, setIsAddingDevice] = useState(false);
-  const [newDeviceName, setNewDeviceName] = useState('');
+  const [discoveredPrinters, setDiscoveredPrinters] = useState([]);
+  const [scanMessage, setScanMessage] = useState('');
 
   const canvasRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -83,9 +84,6 @@ export default function PassportPhotoMaker() {
   // Constants for editor display size (width fixed, height dynamic based on ratio)
   const displayWidth = 320; 
   const displayHeight = (country.heightPx / country.widthPx) * displayWidth;
-  const visiblePrinters = connectionType
-    ? [...MOCK_PRINTERS, ...addedPrinters[connectionType]]
-    : MOCK_PRINTERS;
 
   const handleImageUpload = (e) => {
     const file = e.target.files[0];
@@ -95,7 +93,6 @@ export default function PassportPhotoMaker() {
         const img = new Image();
         img.onload = () => {
           setImage(img);
-          // Reset all settings on new image
           setScale(1);
           setPosition({ x: 0, y: 0 });
           setBrightness(100);
@@ -113,9 +110,10 @@ export default function PassportPhotoMaker() {
   };
 
   const handleCountryChange = (e) => {
-    const selected = COUNTRIES.find((c) => c.id === e.target.value);
+    const selected = COUNTRIES.find((countryOption) => countryOption.id === e.target.value);
+    if (!selected) return;
     setCountry(selected);
-    setPosition({ x: 0, y: 0 }); 
+    setPosition({ x: 0, y: 0 });
     setGeneratedSheet(null);
     setLayoutWarning(null);
   };
@@ -347,48 +345,63 @@ export default function PassportPhotoMaker() {
     setConnectionStatus('idle');
     setConnectionType(null);
     setSelectedPrinter(null);
+    setDiscoveredPrinters([]);
+    setScanMessage('');
   };
 
-  const handleConnect = (type) => {
+  const handleConnect = async (type) => {
     setConnectionType(type);
-    setIsAddingDevice(false);
-    setNewDeviceName('');
+    setDiscoveredPrinters([]);
+    setScanMessage('');
+
+    if (type === 'bluetooth') {
+      setConnectionStatus('unsupported');
+      setScanMessage('The Epson L8050 supports Wi-Fi and Wi-Fi Direct, not Bluetooth. Choose Wi-Fi to search for this printer.');
+      return;
+    }
+
+    if (!Capacitor.isNativePlatform()) {
+      setConnectionStatus('unsupported');
+      setScanMessage('Local printer discovery requires the installed mobile app. In a browser, use the phone print dialog.');
+      return;
+    }
+
     setConnectionStatus('searching');
-    
-    // Simulate finding printers
-    setTimeout(() => {
+    try {
+      const results = await Promise.all(
+        PRINTER_SERVICE_TYPES.map((serviceType) =>
+          mDNS.discover({ type: serviceType, timeout: 5000, useNW: true }),
+        ),
+      );
+      const services = new Map();
+      results.forEach((result) => {
+        result.services.forEach((service) => {
+          const key = `${service.name}|${service.hosts.join(',')}|${service.port}`;
+          services.set(key, service);
+        });
+      });
+      const printers = Array.from(services.values());
+      setDiscoveredPrinters(printers);
+      setScanMessage(printers.length
+        ? `Found ${printers.length} printer${printers.length === 1 ? '' : 's'} on this network.`
+        : 'No printers found. Check that the printer and phone are on the same Wi-Fi network.');
       setConnectionStatus('list');
-    }, 1500);
-  };
-
-  const handleAddDevice = (event) => {
-    event.preventDefault();
-    const deviceName = newDeviceName.trim();
-    if (!deviceName || !connectionType) return;
-
-    const updatedPrinters = {
-      ...addedPrinters,
-      [connectionType]: [...addedPrinters[connectionType], deviceName],
-    };
-    setAddedPrinters(updatedPrinters);
-    setNewDeviceName('');
-    setIsAddingDevice(false);
-
-    window.localStorage.setItem('pcut-added-printers', JSON.stringify(updatedPrinters));
+    } catch (error) {
+      setScanMessage(error instanceof Error ? error.message : 'Could not search the local Wi-Fi network.');
+      setConnectionStatus('error');
+    }
   };
 
   const handleSelectPrinter = (printer) => {
     setSelectedPrinter(printer);
-    setConnectionStatus('connecting');
-    
-    // Simulate connection and sending data
-    setTimeout(() => {
-      setConnectionStatus('success');
-      setTimeout(() => {
-        setShowPrintModal(false);
-        executePrint();
-      }, 1000);
-    }, 2000);
+    const printerKey = `${printer.name}|${printer.hosts.join(',')}|${printer.port}`;
+    const savedPrinters = addedPrinters.wifi.filter((savedPrinter) =>
+      `${savedPrinter.name}|${savedPrinter.hosts.join(',')}|${savedPrinter.port}` !== printerKey,
+    );
+    const updatedPrinters = { wifi: [...savedPrinters, printer] };
+    setAddedPrinters(updatedPrinters);
+    window.localStorage.setItem('pcut-printer-devices', JSON.stringify(updatedPrinters));
+    setConnectionStatus('success');
   };
 
   const executePrint = () => {
@@ -648,7 +661,7 @@ export default function PassportPhotoMaker() {
               <div className="flex-1 flex flex-col justify-center">
                 {connectionStatus === 'idle' && (
                   <div className="animate-in fade-in duration-300">
-                    <p className="text-slate-600 mb-6 text-center text-sm">Select connection method to find nearby printers.</p>
+                    <p className="text-slate-600 mb-6 text-center text-sm">Search for printers on Wi-Fi. The Epson L8050 does not support Bluetooth.</p>
                     <div className="grid grid-cols-2 gap-4">
                       <button onClick={() => handleConnect('wifi')} className="flex flex-col items-center p-5 border-2 border-slate-100 rounded-3xl active:bg-blue-50 active:border-blue-300 transition-colors">
                         <div className="bg-blue-50 p-4 rounded-full mb-3"><Wifi className="w-8 h-8 text-blue-600" /></div>
@@ -665,57 +678,61 @@ export default function PassportPhotoMaker() {
                 {connectionStatus === 'searching' && (
                   <div className="flex flex-col items-center text-center animate-in fade-in">
                     <Loader2 className="w-12 h-12 text-blue-600 animate-spin mb-4" />
-                    <h4 className="text-lg font-semibold text-slate-800 mb-1">Searching...</h4>
-                    <p className="text-sm text-slate-500">Scanning via {connectionType === 'wifi' ? 'Wi-Fi' : 'Bluetooth'}</p>
+                    <h4 className="text-lg font-semibold text-slate-800 mb-1">Searching Wi-Fi...</h4>
+                    <p className="text-sm text-slate-500">Looking for Bonjour printer services on the local network.</p>
+                  </div>
+                )}
+
+                {(connectionStatus === 'unsupported' || connectionStatus === 'error') && (
+                  <div className="flex flex-col items-center text-center animate-in fade-in">
+                    <AlertTriangle className="w-10 h-10 text-amber-500 mb-4" />
+                    <p className="text-sm text-slate-600">{scanMessage}</p>
+                    {connectionType === 'bluetooth' && (
+                      <button onClick={() => handleConnect('wifi')} className="mt-4 rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white">
+                        Search on Wi-Fi
+                      </button>
+                    )}
+                    {!Capacitor.isNativePlatform() && (
+                      <button onClick={() => { setShowPrintModal(false); executePrint(); }} className="mt-4 rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white">
+                        Use phone print dialog
+                      </button>
+                    )}
+                    <button onClick={() => setConnectionStatus('idle')} className="mt-3 px-4 py-2 text-sm font-semibold text-slate-600">
+                      Back
+                    </button>
                   </div>
                 )}
 
                 {connectionStatus === 'list' && (
                   <div className="animate-in fade-in slide-in-from-bottom-4">
                     <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
-                      {visiblePrinters.map((printer, idx) => (
-                        <button key={`${printer}-${idx}`} onClick={() => handleSelectPrinter(printer)} className="w-full flex items-center p-4 border border-slate-100 rounded-2xl active:bg-slate-50 transition-colors text-left">
+                      {addedPrinters.wifi.map((printer, idx) => (
+                        <button key={`saved-${printer.name}-${idx}`} onClick={() => handleSelectPrinter(printer)} className="w-full flex items-center p-4 border border-slate-100 rounded-2xl active:bg-slate-50 transition-colors text-left">
                           <Printer className="w-6 h-6 text-slate-400 mr-4" />
-                          <span className="font-medium text-slate-800">{printer}</span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-medium text-slate-800">{printer.name}</span>
+                            <span className="block truncate text-xs text-slate-500">Saved printer</span>
+                          </span>
+                        </button>
+                      ))}
+                      {discoveredPrinters.map((printer, idx) => (
+                        <button key={`${printer.name}-${printer.port}-${idx}`} onClick={() => handleSelectPrinter(printer)} className="w-full flex items-center p-4 border border-slate-100 rounded-2xl active:bg-slate-50 transition-colors text-left">
+                          <Printer className="w-6 h-6 text-slate-400 mr-4" />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-medium text-slate-800">{printer.name}</span>
+                            <span className="block truncate text-xs text-slate-500">{printer.hosts.join(', ')}:{printer.port}</span>
+                          </span>
                         </button>
                       ))}
                     </div>
+                    {scanMessage && <p className="mt-3 text-center text-xs text-slate-500">{scanMessage}</p>}
                     <button
                       type="button"
-                      onClick={() => setIsAddingDevice((isAdding) => !isAdding)}
+                      onClick={() => handleConnect('wifi')}
                       className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-blue-200 py-3 text-sm font-semibold text-blue-700 active:bg-blue-50"
                     >
                       <Plus className="h-4 w-4" /> Add device
                     </button>
-                    {isAddingDevice && (
-                      <form onSubmit={handleAddDevice} className="mt-3 flex gap-2">
-                        <label htmlFor="pcut-device-name" className="sr-only">Device name</label>
-                        <input
-                          id="pcut-device-name"
-                          autoFocus
-                          value={newDeviceName}
-                          onChange={(event) => setNewDeviceName(event.target.value)}
-                          placeholder={connectionType === 'wifi' ? 'Wi-Fi printer name' : 'Bluetooth printer name'}
-                          className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900"
-                        />
-                        <button
-                          type="submit"
-                          disabled={!newDeviceName.trim()}
-                          className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                        >
-                          Add
-                        </button>
-                      </form>
-                    )}
-                    <p className="mt-3 text-center text-xs text-slate-500">Demo list only; adding a name does not pair a real printer.</p>
-                  </div>
-                )}
-
-                {connectionStatus === 'connecting' && (
-                  <div className="flex flex-col items-center text-center animate-in fade-in">
-                    <Loader2 className="w-12 h-12 text-blue-600 animate-spin mb-4" />
-                    <h4 className="text-lg font-semibold text-slate-800 mb-1">Connecting...</h4>
-                    <p className="text-sm text-slate-500">{selectedPrinter}</p>
                   </div>
                 )}
 
@@ -724,8 +741,11 @@ export default function PassportPhotoMaker() {
                     <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-5">
                       <CheckCircle2 className="w-10 h-10 text-green-600" />
                     </div>
-                    <h4 className="text-2xl font-bold text-slate-800 mb-2">Ready to Print!</h4>
-                    <p className="text-sm text-slate-500">Opening Android Print Service...</p>
+                    <h4 className="text-2xl font-bold text-slate-800 mb-2">Printer added</h4>
+                    <p className="text-sm text-slate-500">{selectedPrinter?.name} was saved. Continue to your phone print dialog to print.</p>
+                    <button onClick={() => { setShowPrintModal(false); executePrint(); }} className="mt-5 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white">
+                      Continue to print
+                    </button>
                   </div>
                 )}
               </div>

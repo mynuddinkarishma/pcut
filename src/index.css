@@ -1,0 +1,93 @@
+@import "tailwindcss";
+
+.brand-logo {
+  animation: brand-logo-float 3s ease-in-out infinite;
+}
+
+.brand-p {
+  position: relative;
+  display: inline-block;
+  animation: brand-p-arrive 620ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.brand-p::after {
+  position: absolute;
+  top: 7%;
+  left: 54%;
+  width: 0.08em;
+  height: 78%;
+  background: #2563eb;
+  content: "";
+  transform: rotate(24deg) scaleY(1);
+  transform-origin: center;
+  animation: brand-p-cut 320ms 280ms ease-out both;
+}
+
+@keyframes brand-p-arrive {
+  0% {
+    opacity: 0;
+    transform: translateY(5px) scale(0.78) rotate(-10deg);
+  }
+
+  70% {
+    opacity: 1;
+    transform: translateY(-1px) scale(1.08) rotate(2deg);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotate(0);
+  }
+}
+
+@keyframes brand-p-cut {
+  from {
+    transform: rotate(24deg) scaleY(0);
+  }
+
+  to {
+    transform: rotate(24deg) scaleY(1);
+  }
+}
+
+@keyframes brand-logo-float {
+  0%,
+  100% {
+    translate: 0 0;
+  }
+
+  50% {
+    translate: 0 -3px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-logo,
+  .brand-p,
+  .brand-p::after {
+    animation: none;
+  }
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  body {
+    margin: 0;
+    font-family: Arial, Helvetica, sans-serif;
+  }
+
+  button,
+  input,
+  select {
+    font: inherit;
+  }
+}

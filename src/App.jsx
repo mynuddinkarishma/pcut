@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   Upload, Download, Printer, Move, ZoomIn, Image as ImageIcon, 
   CheckCircle2, RotateCw, Sun, SlidersHorizontal, 
-  LayoutGrid, Settings2, AlertTriangle, Wifi, Bluetooth, Loader2, X, ChevronDown
+  LayoutGrid, Settings2, AlertTriangle, Wifi, Bluetooth, Loader2, X, ChevronDown, Plus
 } from 'lucide-react';
 
 const DPI = 300;
@@ -27,6 +27,18 @@ const MOCK_PRINTERS = [
   'Epson EcoTank Wi-Fi',
   'Brother HL-L2350DW'
 ];
+
+const loadAddedPrinters = () => {
+  try {
+    const savedPrinters = JSON.parse(window.localStorage.getItem('pcut-added-printers') || '{}');
+    return {
+      wifi: Array.isArray(savedPrinters.wifi) ? savedPrinters.wifi : [],
+      bluetooth: Array.isArray(savedPrinters.bluetooth) ? savedPrinters.bluetooth : [],
+    };
+  } catch {
+    return { wifi: [], bluetooth: [] };
+  }
+};
 
 export default function PassportPhotoMaker() {
   // Image and spatial state
@@ -61,6 +73,9 @@ export default function PassportPhotoMaker() {
   const [connectionStatus, setConnectionStatus] = useState('idle'); // 'idle', 'searching', 'list', 'connecting', 'success'
   const [connectionType, setConnectionType] = useState(null);
   const [selectedPrinter, setSelectedPrinter] = useState(null);
+  const [addedPrinters, setAddedPrinters] = useState(loadAddedPrinters);
+  const [isAddingDevice, setIsAddingDevice] = useState(false);
+  const [newDeviceName, setNewDeviceName] = useState('');
 
   const canvasRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -68,6 +83,9 @@ export default function PassportPhotoMaker() {
   // Constants for editor display size (width fixed, height dynamic based on ratio)
   const displayWidth = 320; 
   const displayHeight = (country.heightPx / country.widthPx) * displayWidth;
+  const visiblePrinters = connectionType
+    ? [...MOCK_PRINTERS, ...addedPrinters[connectionType]]
+    : MOCK_PRINTERS;
 
   const handleImageUpload = (e) => {
     const file = e.target.files[0];
@@ -333,12 +351,30 @@ export default function PassportPhotoMaker() {
 
   const handleConnect = (type) => {
     setConnectionType(type);
+    setIsAddingDevice(false);
+    setNewDeviceName('');
     setConnectionStatus('searching');
     
     // Simulate finding printers
     setTimeout(() => {
       setConnectionStatus('list');
     }, 1500);
+  };
+
+  const handleAddDevice = (event) => {
+    event.preventDefault();
+    const deviceName = newDeviceName.trim();
+    if (!deviceName || !connectionType) return;
+
+    const updatedPrinters = {
+      ...addedPrinters,
+      [connectionType]: [...addedPrinters[connectionType], deviceName],
+    };
+    setAddedPrinters(updatedPrinters);
+    setNewDeviceName('');
+    setIsAddingDevice(false);
+
+    window.localStorage.setItem('pcut-added-printers', JSON.stringify(updatedPrinters));
   };
 
   const handleSelectPrinter = (printer) => {
@@ -637,13 +673,41 @@ export default function PassportPhotoMaker() {
                 {connectionStatus === 'list' && (
                   <div className="animate-in fade-in slide-in-from-bottom-4">
                     <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
-                      {MOCK_PRINTERS.map((printer, idx) => (
-                        <button key={idx} onClick={() => handleSelectPrinter(printer)} className="w-full flex items-center p-4 border border-slate-100 rounded-2xl active:bg-slate-50 transition-colors text-left">
+                      {visiblePrinters.map((printer, idx) => (
+                        <button key={`${printer}-${idx}`} onClick={() => handleSelectPrinter(printer)} className="w-full flex items-center p-4 border border-slate-100 rounded-2xl active:bg-slate-50 transition-colors text-left">
                           <Printer className="w-6 h-6 text-slate-400 mr-4" />
                           <span className="font-medium text-slate-800">{printer}</span>
                         </button>
                       ))}
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingDevice((isAdding) => !isAdding)}
+                      className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-blue-200 py-3 text-sm font-semibold text-blue-700 active:bg-blue-50"
+                    >
+                      <Plus className="h-4 w-4" /> Add device
+                    </button>
+                    {isAddingDevice && (
+                      <form onSubmit={handleAddDevice} className="mt-3 flex gap-2">
+                        <label htmlFor="pcut-device-name" className="sr-only">Device name</label>
+                        <input
+                          id="pcut-device-name"
+                          autoFocus
+                          value={newDeviceName}
+                          onChange={(event) => setNewDeviceName(event.target.value)}
+                          placeholder={connectionType === 'wifi' ? 'Wi-Fi printer name' : 'Bluetooth printer name'}
+                          className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900"
+                        />
+                        <button
+                          type="submit"
+                          disabled={!newDeviceName.trim()}
+                          className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                        >
+                          Add
+                        </button>
+                      </form>
+                    )}
+                    <p className="mt-3 text-center text-xs text-slate-500">Demo list only; adding a name does not pair a real printer.</p>
                   </div>
                 )}
 
